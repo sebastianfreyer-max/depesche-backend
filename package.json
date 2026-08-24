@@ -12,6 +12,6 @@
     "@anthropic-ai/sdk": "^0.24.0"
   },
   "engines": {
-    "node": "18.x"
+    "node": "24.x"
   }
 }
