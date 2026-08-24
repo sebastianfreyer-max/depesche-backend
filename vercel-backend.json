@@ -1,0 +1,13 @@
+{
+  "buildCommand": "npm install",
+  "outputDirectory": ".",
+  "env": {
+    "ANTHROPIC_API_KEY": "@anthropic_api_key"
+  },
+  "functions": {
+    "api/articles.js": {
+      "runtime": "nodejs18.x",
+      "maxDuration": 60
+    }
+  }
+}
