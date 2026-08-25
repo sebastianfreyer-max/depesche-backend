@@ -1,9 +1,9 @@
 {
   "name": "depesche-backend",
-  "version": "1.0.0",
-  "description": "DEPESCHE Backend - Daily AI News Curation",
+  "version": "2.0.0",
+  "description": "DEPESCHE Backend - Kostenlose RSS-basierte KI-News-Kuration",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.24.0"
+    "rss-parser": "^3.13.0"
   },
   "engines": {
     "node": "24.x"
