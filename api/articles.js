@@ -1,4 +1,4 @@
-import Anthropic from "@anthropic-ai/sdk";
+const Anthropic = require("@anthropic-ai/sdk");
 
 const client = new Anthropic({
   apiKey: process.env.ANTHROPIC_API_KEY,
@@ -17,7 +17,7 @@ const curateArticles = async () => {
 FOKUS: Internationale Meldungen mit europäischem Schwerpunkt
 
 Gib AUSSCHLIESSLICH gültiges JSON zurück, KEINE Markdown:
-{"articles":[{"headline":"Schlagzeile","summary":"1-2 Sätze","content":"Analyse (mehrere Absätze durch \\n getrennt)","conclusion":"Fazit","source":"Quelle","date":"TT.MM.YYYY","category":"Kategorie"}]}
+{"articles":[{"headline":"Schlagzeile","summary":"1-2 Sätze","content":"Analyse","conclusion":"Fazit","source":"Quelle","date":"TT.MM.YYYY","category":"Kategorie"}]}
 
 Genau 20 Artikel.`;
 
@@ -32,7 +32,6 @@ Genau 20 Artikel.`;
     const start = text.indexOf("{");
     const end = text.lastIndexOf("}");
     if (start === -1 || end === -1) {
-      console.error("No JSON in response:", text.substring(0, 200));
       return { articles: [] };
     }
 
@@ -44,7 +43,7 @@ Genau 20 Artikel.`;
   }
 };
 
-export default async (req, res) => {
+module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Content-Type", "application/json");
