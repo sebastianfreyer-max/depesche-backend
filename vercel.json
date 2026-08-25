@@ -1,1 +1,7 @@
-{}
+{
+  "functions": {
+    "api/articles.js": {
+      "maxDuration": 60
+    }
+  }
+}
