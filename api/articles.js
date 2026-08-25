@@ -1,47 +1,62 @@
-const Anthropic = require("@anthropic-ai/sdk");
+const Parser = require("rss-parser");
+const parser = new Parser({ timeout: 8000 });
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+// Kostenlose RSS-Quellen, internationale KI-News mit europäischem Schwerpunkt
+const FEEDS = [
+  { url: "https://tim-hilde.github.io/anthropic-rss/rss.xml", source: "Anthropic", category: "Anthropic / Claude" },
+  { url: "https://openai.com/news/rss.xml", source: "OpenAI", category: "OpenAI / ChatGPT" },
+  { url: "https://deepmind.google/blog/feed/basic/", source: "Google DeepMind", category: "Google DeepMind" },
+  { url: "https://techcrunch.com/category/artificial-intelligence/feed/", source: "TechCrunch", category: "KI allgemein" },
+  { url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", source: "The Verge", category: "KI allgemein" },
+  { url: "https://www.euractiv.com/sections/digital/feed/", source: "Euractiv", category: "EU / Regulierung" },
+  { url: "https://huggingface.co/blog/feed.xml", source: "Hugging Face", category: "Forschung / Open Source" },
+  { url: "https://venturebeat.com/category/ai/feed/", source: "VentureBeat", category: "KI allgemein" },
+];
 
-const curateArticles = async () => {
-  const prompt = `Du bist ein Redakteur für KI-News. Sammle die TOP 20 wichtigsten und aktuellsten Nachrichten aus den letzten 24 Stunden zu:
-- Künstliche Intelligenz (allgemein)
-- Anthropic / Claude
-- OpenAI / ChatGPT
-- Google DeepMind
-- Andere KI-Labs
-- EU AI Act / Regulierung
-- KI-Sicherheit
+function cleanText(html) {
+  return (html || "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-FOKUS: Internationale Meldungen mit europäischem Schwerpunkt
+function formatDate(d) {
+  if (!d) return "";
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
 
-Gib AUSSCHLIESSLICH gültiges JSON zurück, KEINE Markdown:
-{"articles":[{"headline":"Schlagzeile","summary":"1-2 Sätze","content":"Analyse","conclusion":"Fazit","source":"Quelle","date":"TT.MM.YYYY","category":"Kategorie"}]}
+async function fetchAllFeeds() {
+  const results = await Promise.allSettled(FEEDS.map((f) => parser.parseURL(f.url)));
+  let items = [];
 
-Genau 20 Artikel.`;
-
-  try {
-    const response = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 8000,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const text = response.content[0].type === "text" ? response.content[0].text : "";
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
-    if (start === -1 || end === -1) {
-      return { articles: [] };
+  results.forEach((r, i) => {
+    const feedMeta = FEEDS[i];
+    if (r.status === "fulfilled") {
+      (r.value.items || []).slice(0, 6).forEach((item) => {
+        const rawDate = item.isoDate || item.pubDate || "";
+        items.push({
+          headline: item.title || "Ohne Titel",
+          summary: cleanText(item.contentSnippet || item.summary || "").slice(0, 220),
+          content: cleanText(item.content || item.contentSnippet || item.summary || "").slice(0, 1500),
+          source: feedMeta.source,
+          category: feedMeta.category,
+          date: formatDate(rawDate),
+          link: item.link || "",
+          _sortDate: rawDate,
+        });
+      });
+    } else {
+      console.error("Feed fehlgeschlagen:", feedMeta.url, r.reason && r.reason.message);
     }
+  });
 
-    const data = JSON.parse(text.slice(start, end + 1));
-    return data;
-  } catch (e) {
-    console.error("Claude API Error:", e.message);
-    return { articles: [] };
-  }
-};
+  items.sort((a, b) => new Date(b._sortDate) - new Date(a._sortDate));
+  items.forEach((it) => delete it._sortDate);
+
+  return items.slice(0, 20);
+}
 
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -55,11 +70,11 @@ module.exports = async (req, res) => {
 
   if (req.method === "GET") {
     try {
-      const data = await curateArticles();
+      const articles = await fetchAllFeeds();
       res.status(200).json({
-        articles: data.articles || [],
+        articles,
         lastUpdate: new Date().toISOString(),
-        count: (data.articles || []).length,
+        count: articles.length,
       });
     } catch (e) {
       res.status(500).json({ error: e.message, articles: [] });
