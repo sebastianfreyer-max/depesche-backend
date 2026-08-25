@@ -1,13 +1,7 @@
 {
   "name": "depesche-backend",
   "version": "1.0.0",
-  "type": "module",
   "description": "DEPESCHE Backend - Daily AI News Curation",
-  "main": "backend-server.js",
-  "scripts": {
-    "start": "node backend-server.js",
-    "dev": "node backend-server.js"
-  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.24.0"
   },
