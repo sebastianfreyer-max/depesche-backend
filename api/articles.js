@@ -1,5 +1,10 @@
 const Parser = require("rss-parser");
-const parser = new Parser({ timeout: 8000 });
+const parser = new Parser({
+  timeout: 8000,
+  customFields: {
+    item: [["content:encoded", "contentEncoded"]],
+  },
+});
 
 // Kostenlose RSS-Quellen, internationale KI-News mit europäischem Schwerpunkt
 const FEEDS = [
@@ -62,7 +67,7 @@ async function fetchAllFeeds() {
         items.push({
           headline: cleanText(item.title || "Ohne Titel"),
           summary: cleanText(item.contentSnippet || item.summary || "").slice(0, 220),
-          content: cleanText(item.content || item.contentSnippet || item.summary || "").slice(0, 1500),
+          content: cleanText(item.contentEncoded || item.content || item.contentSnippet || item.summary || "").slice(0, 4000),
           source: feedMeta.source,
           category: feedMeta.category,
           date: formatDate(rawDate),
