@@ -16,6 +16,10 @@ const FEEDS = [
 function cleanText(html) {
   return (html || "")
     .replace(/<[^>]*>/g, "")
+    .replace(/&ntilde;/g, "ñ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -25,6 +29,25 @@ function formatDate(d) {
   const date = new Date(d);
   if (isNaN(date.getTime())) return "";
   return date.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+// Kostenlose Übersetzung über MyMemory (kein API-Key nötig, Fair-Use-Limit)
+async function translateText(text) {
+  if (!text || text.length < 2) return text;
+  try {
+    const truncated = text.slice(0, 480); // MyMemory-Limit pro Anfrage
+    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(truncated)}&langpair=en|de`;
+    const res = await fetch(url);
+    if (!res.ok) return text;
+    const data = await res.json();
+    const translated = data && data.responseData && data.responseData.translatedText;
+    if (translated && translated.length > 0 && !translated.toUpperCase().includes("MYMEMORY WARNING")) {
+      return translated;
+    }
+    return text;
+  } catch (e) {
+    return text;
+  }
 }
 
 async function fetchAllFeeds() {
@@ -37,7 +60,7 @@ async function fetchAllFeeds() {
       (r.value.items || []).slice(0, 6).forEach((item) => {
         const rawDate = item.isoDate || item.pubDate || "";
         items.push({
-          headline: item.title || "Ohne Titel",
+          headline: cleanText(item.title || "Ohne Titel"),
           summary: cleanText(item.contentSnippet || item.summary || "").slice(0, 220),
           content: cleanText(item.content || item.contentSnippet || item.summary || "").slice(0, 1500),
           source: feedMeta.source,
@@ -53,9 +76,22 @@ async function fetchAllFeeds() {
   });
 
   items.sort((a, b) => new Date(b._sortDate) - new Date(a._sortDate));
+  items = items.slice(0, 20);
   items.forEach((it) => delete it._sortDate);
 
-  return items.slice(0, 20);
+  // Schlagzeile + Zusammenfassung ins Deutsche übersetzen (kostenlos, parallel)
+  await Promise.all(
+    items.map(async (item) => {
+      const [headlineDe, summaryDe] = await Promise.all([
+        translateText(item.headline),
+        translateText(item.summary),
+      ]);
+      item.headline = headlineDe;
+      item.summary = summaryDe;
+    })
+  );
+
+  return items;
 }
 
 module.exports = async (req, res) => {
