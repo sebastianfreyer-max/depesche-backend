@@ -1,76 +1,62 @@
-const Anthropic = require("@anthropic-ai/sdk");
+const Parser = require("rss-parser");
+const parser = new Parser({ timeout: 8000 });
 
-const client = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+// Kostenlose RSS-Quellen, internationale KI-News mit europäischem Schwerpunkt
+const FEEDS = [
+  { url: "https://tim-hilde.github.io/anthropic-rss/rss.xml", source: "Anthropic", category: "Anthropic / Claude" },
+  { url: "https://openai.com/news/rss.xml", source: "OpenAI", category: "OpenAI / ChatGPT" },
+  { url: "https://deepmind.google/blog/feed/basic/", source: "Google DeepMind", category: "Google DeepMind" },
+  { url: "https://techcrunch.com/category/artificial-intelligence/feed/", source: "TechCrunch", category: "KI allgemein" },
+  { url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", source: "The Verge", category: "KI allgemein" },
+  { url: "https://www.euractiv.com/sections/digital/feed/", source: "Euractiv", category: "EU / Regulierung" },
+  { url: "https://huggingface.co/blog/feed.xml", source: "Hugging Face", category: "Forschung / Open Source" },
+  { url: "https://venturebeat.com/category/ai/feed/", source: "VentureBeat", category: "KI allgemein" },
+];
 
-const curateArticles = async () => {
-  const prompt = `Du bist ein Redakteur für KI-News. Sammle die TOP 10 wichtigsten und aktuellsten Nachrichten aus den letzten 24-48 Stunden zu:
-- Künstliche Intelligenz (allgemein)
-- Anthropic / Claude
-- OpenAI / ChatGPT
-- Google DeepMind
-- EU AI Act / Regulierung
+function cleanText(html) {
+  return (html || "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
-FOKUS: Internationale Meldungen mit europäischem Schwerpunkt
+function formatDate(d) {
+  if (!d) return "";
+  const date = new Date(d);
+  if (isNaN(date.getTime())) return "";
+  return date.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
 
-Antworte NUR mit validem JSON in exakt diesem Format, ohne Markdown-Codeblöcke, ohne Erklärungen davor oder danach:
+async function fetchAllFeeds() {
+  const results = await Promise.allSettled(FEEDS.map((f) => parser.parseURL(f.url)));
+  let items = [];
 
-{"articles":[{"headline":"Kurze Schlagzeile","summary":"Ein bis zwei Sätze Zusammenfassung","content":"Ausführlicher Absatz mit Hintergrund und Details","conclusion":"Kurzes fachliches Fazit","source":"Quellenname","date":"TT.MM.YYYY","category":"Kategoriename"}]}
-
-Genau 10 Artikel. Wichtig: Escape alle Anführungszeichen innerhalb der Strings korrekt mit Backslash.`;
-
-  try {
-    const response = await client.messages.create({
-      model: "claude-sonnet-5",
-      max_tokens: 6000,
-      messages: [{ role: "user", content: prompt }],
-    });
-
-    const text = response.content
-      .filter((b) => b.type === "text")
-      .map((b) => b.text)
-      .join("\n");
-
-    console.log("Raw response length:", text.length);
-    console.log("First 200 chars:", text.substring(0, 200));
-
-    // Robusteres JSON-Parsing
-    let jsonText = text.trim();
-    
-    // Entferne Markdown-Codeblöcke falls vorhanden
-    jsonText = jsonText.replace(/```json\s*/g, "").replace(/```\s*/g, "");
-    
-    const start = jsonText.indexOf("{");
-    const end = jsonText.lastIndexOf("}");
-    
-    if (start === -1 || end === -1) {
-      console.error("No JSON braces found");
-      return { articles: [], error: "No JSON found in response" };
+  results.forEach((r, i) => {
+    const feedMeta = FEEDS[i];
+    if (r.status === "fulfilled") {
+      (r.value.items || []).slice(0, 6).forEach((item) => {
+        const rawDate = item.isoDate || item.pubDate || "";
+        items.push({
+          headline: item.title || "Ohne Titel",
+          summary: cleanText(item.contentSnippet || item.summary || "").slice(0, 220),
+          content: cleanText(item.content || item.contentSnippet || item.summary || "").slice(0, 1500),
+          source: feedMeta.source,
+          category: feedMeta.category,
+          date: formatDate(rawDate),
+          link: item.link || "",
+          _sortDate: rawDate,
+        });
+      });
+    } else {
+      console.error("Feed fehlgeschlagen:", feedMeta.url, r.reason && r.reason.message);
     }
+  });
 
-    jsonText = jsonText.slice(start, end + 1);
+  items.sort((a, b) => new Date(b._sortDate) - new Date(a._sortDate));
+  items.forEach((it) => delete it._sortDate);
 
-    let data;
-    try {
-      data = JSON.parse(jsonText);
-    } catch (parseErr) {
-      console.error("JSON Parse failed:", parseErr.message);
-      console.error("Attempted to parse:", jsonText.substring(0, 500));
-      return { articles: [], error: "JSON parse failed: " + parseErr.message };
-    }
-
-    if (!data.articles || !Array.isArray(data.articles)) {
-      console.error("No articles array in parsed data");
-      return { articles: [], error: "Invalid structure" };
-    }
-
-    return data;
-  } catch (e) {
-    console.error("Claude API Error:", e.message);
-    return { articles: [], error: e.message };
-  }
-};
+  return items.slice(0, 20);
+}
 
 module.exports = async (req, res) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -84,12 +70,11 @@ module.exports = async (req, res) => {
 
   if (req.method === "GET") {
     try {
-      const data = await curateArticles();
+      const articles = await fetchAllFeeds();
       res.status(200).json({
-        articles: data.articles || [],
+        articles,
         lastUpdate: new Date().toISOString(),
-        count: (data.articles || []).length,
-        debug: data.error || null,
+        count: articles.length,
       });
     } catch (e) {
       res.status(500).json({ error: e.message, articles: [] });
