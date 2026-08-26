@@ -1,4 +1,7 @@
 const Parser = require("rss-parser");
+const { JSDOM } = require("jsdom");
+const { Readability } = require("@mozilla/readability");
+
 const parser = new Parser({
   timeout: 8000,
   customFields: {
@@ -29,6 +32,26 @@ function cleanText(html) {
     .trim();
 }
 
+// Wandelt HTML in Absätze um (ein \n pro Absatz), statt alles zu einer Zeile zu verschmelzen
+function cleanParagraphs(html) {
+  if (!html) return "";
+  let text = html
+    .replace(/<\/(p|div|h[1-6]|li|blockquote)>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]*>/g, "")
+    .replace(/&ntilde;/g, "ñ")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
+  return text;
+}
+
 function formatDate(d) {
   if (!d) return "";
   const date = new Date(d);
@@ -40,7 +63,7 @@ function formatDate(d) {
 async function translateText(text) {
   if (!text || text.length < 2) return text;
   try {
-    const truncated = text.slice(0, 480); // MyMemory-Limit pro Anfrage
+    const truncated = text.slice(0, 480);
     const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(truncated)}&langpair=en|de`;
     const res = await fetch(url);
     if (!res.ok) return text;
@@ -52,6 +75,38 @@ async function translateText(text) {
     return text;
   } catch (e) {
     return text;
+  }
+}
+
+// Holt die Original-Artikelseite und extrahiert den vollständigen Lesetext
+// (dieselbe Technik, die auch Firefox für den Lesemodus nutzt) – komplett kostenlos
+async function fetchFullArticleText(url) {
+  if (!url) return null;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 7000);
+
+  try {
+    const res = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      },
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) return null;
+
+    const html = await res.text();
+    const dom = new JSDOM(html, { url });
+    const reader = new Readability(dom.window.document);
+    const parsed = reader.parse();
+
+    if (!parsed || !parsed.content) return null;
+    const text = cleanParagraphs(parsed.content);
+    return text.length > 200 ? text.slice(0, 6000) : null;
+  } catch (e) {
+    clearTimeout(timeoutId);
+    return null;
   }
 }
 
@@ -67,7 +122,7 @@ async function fetchAllFeeds() {
         items.push({
           headline: cleanText(item.title || "Ohne Titel"),
           summary: cleanText(item.contentSnippet || item.summary || "").slice(0, 220),
-          content: cleanText(item.contentEncoded || item.content || item.contentSnippet || item.summary || "").slice(0, 4000),
+          content: cleanText(item.contentEncoded || item.content || item.contentSnippet || item.summary || "").slice(0, 2000),
           source: feedMeta.source,
           category: feedMeta.category,
           date: formatDate(rawDate),
@@ -84,13 +139,18 @@ async function fetchAllFeeds() {
   items = items.slice(0, 20);
   items.forEach((it) => delete it._sortDate);
 
-  // Schlagzeile + Zusammenfassung ins Deutsche übersetzen (kostenlos, parallel)
+  // Für jeden Artikel parallel: Volltext von der Originalseite holen + Schlagzeile/Summary übersetzen
   await Promise.all(
     items.map(async (item) => {
-      const [headlineDe, summaryDe] = await Promise.all([
+      const [fullText, headlineDe, summaryDe] = await Promise.all([
+        fetchFullArticleText(item.link).catch(() => null),
         translateText(item.headline),
         translateText(item.summary),
       ]);
+
+      if (fullText) {
+        item.content = fullText; // Volltext ersetzt den kurzen RSS-Teaser
+      }
       item.headline = headlineDe;
       item.summary = summaryDe;
     })
