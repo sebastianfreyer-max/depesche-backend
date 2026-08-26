@@ -201,18 +201,20 @@ async function fetchAllFeeds() {
   items = items.slice(0, 20);
   items.forEach((it) => delete it._sortDate);
 
-  // Für jeden Artikel parallel: Volltext von der Originalseite holen + alles ins Deutsche übersetzen
-  await Promise.all(
-    items.map(async (item) => {
+  const TOP_N = 5; // Nur die aktuellsten 5 bekommen den vollen, übersetzten Volltext (spart Anfragen)
+
+  const work = Promise.all(
+    items.map(async (item, idx) => {
       const fullText = await fetchFullArticleText(item.link).catch(() => null);
       if (fullText) {
         item.content = fullText; // Volltext ersetzt den kurzen RSS-Teaser
       }
 
+      const translateFullContent = idx < TOP_N;
       const [headlineDe, summaryDe, contentDe] = await Promise.all([
         translateText(item.headline),
         translateText(item.summary),
-        translateLongText(item.content),
+        translateFullContent ? translateLongText(item.content) : Promise.resolve(item.content),
       ]);
 
       item.headline = headlineDe;
@@ -220,6 +222,11 @@ async function fetchAllFeeds() {
       item.content = contentDe;
     })
   );
+
+  // Sicherheitsnetz: Nach 48s abbrechen und zurückgeben, was bis dahin fertig ist,
+  // statt die ganze Anfrage ins Timeout laufen zu lassen (lieber teilweise Englisch als gar nichts)
+  const timeout = new Promise((resolve) => setTimeout(resolve, 48000));
+  await Promise.race([work, timeout]);
 
   return items;
 }
