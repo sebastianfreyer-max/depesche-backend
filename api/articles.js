@@ -79,31 +79,41 @@ function createLimiter(concurrency) {
   };
 }
 const translateLimit = createLimiter(4);
+const translateStats = { attempted: 0, succeeded: 0, failed: 0, lastError: null, lastErrorSample: null };
 
 async function translateTextRaw(text) {
   const truncated = text.slice(0, 480);
   const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(truncated)}&langpair=en|de`;
   const res = await fetch(url);
-  if (!res.ok) throw new Error("bad status");
+  if (!res.ok) throw new Error("HTTP " + res.status);
   const data = await res.json();
   const translated = data && data.responseData && data.responseData.translatedText;
   if (translated && translated.length > 0 && !translated.toUpperCase().includes("MYMEMORY WARNING")) {
     return translated;
   }
-  throw new Error("empty or warning response");
+  throw new Error("Leere/Warnungs-Antwort: " + JSON.stringify(data).slice(0, 200));
 }
 
 // Kostenlose Übersetzung über MyMemory (kein API-Key nötig, Fair-Use-Limit, gedrosselt + 1 Retry)
 async function translateText(text) {
   if (!text || text.length < 2) return text;
+  translateStats.attempted++;
   return translateLimit(async () => {
     try {
-      return await translateTextRaw(text);
+      const result = await translateTextRaw(text);
+      translateStats.succeeded++;
+      return result;
     } catch (e) {
       await new Promise((r) => setTimeout(r, 500));
       try {
-        return await translateTextRaw(text);
+        const result = await translateTextRaw(text);
+        translateStats.succeeded++;
+        return result;
       } catch (e2) {
+        translateStats.failed++;
+        translateStats.lastError = e2.message;
+        translateStats.lastErrorSample = text.slice(0, 40);
+        console.error("Übersetzung endgültig fehlgeschlagen:", e2.message, "| Text:", text.slice(0, 60));
         return text; // nach 2 Versuchen: Original behalten statt Fehler zu werfen
       }
     }
@@ -248,6 +258,7 @@ module.exports = async (req, res) => {
         articles,
         lastUpdate: new Date().toISOString(),
         count: articles.length,
+        translationDebug: translateStats,
       });
     } catch (e) {
       res.status(500).json({ error: e.message, articles: [] });
