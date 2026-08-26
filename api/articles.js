@@ -59,23 +59,55 @@ function formatDate(d) {
   return date.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
-// Kostenlose Übersetzung über MyMemory (kein API-Key nötig, Fair-Use-Limit)
+// Begrenzt gleichzeitige Übersetzungs-Anfragen, damit der kostenlose Dienst nicht blockt
+function createLimiter(concurrency) {
+  let active = 0;
+  const queue = [];
+  const next = () => {
+    active--;
+    if (queue.length > 0) queue.shift()();
+  };
+  return function limit(fn) {
+    return new Promise((resolve, reject) => {
+      const task = () => {
+        active++;
+        fn().then((v) => { resolve(v); next(); }, (e) => { reject(e); next(); });
+      };
+      if (active < concurrency) task();
+      else queue.push(task);
+    });
+  };
+}
+const translateLimit = createLimiter(4);
+
+async function translateTextRaw(text) {
+  const truncated = text.slice(0, 480);
+  const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(truncated)}&langpair=en|de`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("bad status");
+  const data = await res.json();
+  const translated = data && data.responseData && data.responseData.translatedText;
+  if (translated && translated.length > 0 && !translated.toUpperCase().includes("MYMEMORY WARNING")) {
+    return translated;
+  }
+  throw new Error("empty or warning response");
+}
+
+// Kostenlose Übersetzung über MyMemory (kein API-Key nötig, Fair-Use-Limit, gedrosselt + 1 Retry)
 async function translateText(text) {
   if (!text || text.length < 2) return text;
-  try {
-    const truncated = text.slice(0, 480);
-    const url = `https://api.mymemory.translated.net/get?q=${encodeURIComponent(truncated)}&langpair=en|de`;
-    const res = await fetch(url);
-    if (!res.ok) return text;
-    const data = await res.json();
-    const translated = data && data.responseData && data.responseData.translatedText;
-    if (translated && translated.length > 0 && !translated.toUpperCase().includes("MYMEMORY WARNING")) {
-      return translated;
+  return translateLimit(async () => {
+    try {
+      return await translateTextRaw(text);
+    } catch (e) {
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        return await translateTextRaw(text);
+      } catch (e2) {
+        return text; // nach 2 Versuchen: Original behalten statt Fehler zu werfen
+      }
     }
-    return text;
-  } catch (e) {
-    return text;
-  }
+  });
 }
 
 // Zerlegt langen Text an Zeilengrenzen in Häppchen unter dem Zeichenlimit des Übersetzungsdienstes
@@ -133,7 +165,7 @@ async function fetchFullArticleText(url) {
 
     if (!parsed || !parsed.content) return null;
     const text = cleanParagraphs(parsed.content);
-    return text.length > 200 ? text.slice(0, 4000) : null;
+    return text.length > 200 ? text.slice(0, 2800) : null;
   } catch (e) {
     clearTimeout(timeoutId);
     return null;
