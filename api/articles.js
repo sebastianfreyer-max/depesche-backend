@@ -78,6 +78,36 @@ async function translateText(text) {
   }
 }
 
+// Zerlegt langen Text an Zeilengrenzen in Häppchen unter dem Zeichenlimit des Übersetzungsdienstes
+function chunkTextByLines(text, maxLen) {
+  const lines = text.split("\n");
+  const chunks = [];
+  let current = "";
+  for (const line of lines) {
+    const candidate = current ? current + "\n" + line : line;
+    if (candidate.length > maxLen && current) {
+      chunks.push(current);
+      current = line;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks;
+}
+
+// Übersetzt beliebig langen Text stückweise (Zeilen/Absätze bleiben erhalten)
+async function translateLongText(text) {
+  if (!text) return text;
+  const chunks = chunkTextByLines(text, 450);
+  const translated = [];
+  for (const chunk of chunks) {
+    const t = await translateText(chunk);
+    translated.push(t);
+  }
+  return translated.join("\n");
+}
+
 // Holt die Original-Artikelseite und extrahiert den vollständigen Lesetext
 // (dieselbe Technik, die auch Firefox für den Lesemodus nutzt) – komplett kostenlos
 async function fetchFullArticleText(url) {
@@ -103,7 +133,7 @@ async function fetchFullArticleText(url) {
 
     if (!parsed || !parsed.content) return null;
     const text = cleanParagraphs(parsed.content);
-    return text.length > 200 ? text.slice(0, 6000) : null;
+    return text.length > 200 ? text.slice(0, 4000) : null;
   } catch (e) {
     clearTimeout(timeoutId);
     return null;
@@ -139,20 +169,23 @@ async function fetchAllFeeds() {
   items = items.slice(0, 20);
   items.forEach((it) => delete it._sortDate);
 
-  // Für jeden Artikel parallel: Volltext von der Originalseite holen + Schlagzeile/Summary übersetzen
+  // Für jeden Artikel parallel: Volltext von der Originalseite holen + alles ins Deutsche übersetzen
   await Promise.all(
     items.map(async (item) => {
-      const [fullText, headlineDe, summaryDe] = await Promise.all([
-        fetchFullArticleText(item.link).catch(() => null),
-        translateText(item.headline),
-        translateText(item.summary),
-      ]);
-
+      const fullText = await fetchFullArticleText(item.link).catch(() => null);
       if (fullText) {
         item.content = fullText; // Volltext ersetzt den kurzen RSS-Teaser
       }
+
+      const [headlineDe, summaryDe, contentDe] = await Promise.all([
+        translateText(item.headline),
+        translateText(item.summary),
+        translateLongText(item.content),
+      ]);
+
       item.headline = headlineDe;
       item.summary = summaryDe;
+      item.content = contentDe;
     })
   );
 
