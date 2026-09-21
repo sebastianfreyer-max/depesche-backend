@@ -10,13 +10,15 @@ const parser = new Parser({
 });
 
 // Kostenlose RSS-Quellen, internationale KI-News mit europäischem Schwerpunkt
+// filter:true  → Feed ist NICHT per URL auf KI eingegrenzt und wird zusätzlich
+//                inhaltlich auf KI-Bezug geprüft (Firmen-Blogs + Euractiv).
 const FEEDS = [
-  { url: "https://tim-hilde.github.io/anthropic-rss/rss.xml", source: "Anthropic", category: "Anthropic / Claude" },
-  { url: "https://openai.com/news/rss.xml", source: "OpenAI", category: "OpenAI / ChatGPT" },
-  { url: "https://deepmind.google/blog/feed/basic/", source: "Google DeepMind", category: "Google DeepMind" },
+  { url: "https://tim-hilde.github.io/anthropic-rss/rss.xml", source: "Anthropic", category: "Anthropic / Claude", filter: true },
+  { url: "https://openai.com/news/rss.xml", source: "OpenAI", category: "OpenAI / ChatGPT", filter: true },
+  { url: "https://deepmind.google/blog/feed/basic/", source: "Google DeepMind", category: "Google DeepMind", filter: true },
   { url: "https://techcrunch.com/category/artificial-intelligence/feed/", source: "TechCrunch", category: "KI allgemein" },
   { url: "https://www.theverge.com/rss/ai-artificial-intelligence/index.xml", source: "The Verge", category: "KI allgemein" },
-  { url: "https://www.euractiv.com/sections/digital/feed/", source: "Euractiv", category: "EU / Regulierung" },
+  { url: "https://www.euractiv.com/sections/digital/feed/", source: "Euractiv", category: "EU / Regulierung", filter: true },
   { url: "https://huggingface.co/blog/feed.xml", source: "Hugging Face", category: "Forschung / Open Source" },
   { url: "https://venturebeat.com/category/ai/feed/", source: "VentureBeat", category: "KI allgemein" },
 ];
@@ -57,6 +59,64 @@ function formatDate(d) {
   const date = new Date(d);
   if (isNaN(date.getTime())) return "";
   return date.toLocaleDateString("de-DE", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+// --- Themenfilter: erkennt KI-Bezug an Titel/Text (nur für breite Feeds genutzt) ---
+const AI_PATTERN = new RegExp(
+  "\\b(" +
+    [
+      "a\\.?i", "ki", "ml", "llms?", "gpt", "genai",
+      "artificial intelligence", "künstliche intelligenz",
+      "machine learning", "deep learning",
+      "(large language|foundation|language|ai|diffusion|reasoning) models?",
+      "generative", "neural", "chatbot", "agentic", "ai agents?", "fine-?tun\\w*",
+      "openai", "anthropic", "claude", "gemini", "deepmind",
+      "mistral", "llama", "copilot", "hugging ?face", "ai act", "ai regulation"
+    ].join("|") +
+    ")\\b",
+  "i"
+);
+
+function isAiRelevant(text) {
+  return !!text && AI_PATTERN.test(text);
+}
+
+// --- Deduplizierung über Titel-Ähnlichkeit (Jaccard über signifikante Wörter) ---
+const STOP = new Set([
+  "the","a","an","and","or","for","to","of","in","on","with","as","is","are",
+  "new","how","why","what","its","their","this","that","from","by","at","be",
+  "der","die","das","und","oder","für","mit","von","im","ein","eine","neue","neuer",
+]);
+
+function titleTokens(title) {
+  return new Set(
+    (title || "")
+      .toLowerCase()
+      .replace(/[^a-z0-9äöüß\s]/g, " ")
+      .split(/\s+/)
+      .filter((w) => w.length > 2 && !STOP.has(w))
+  );
+}
+
+function jaccard(a, b) {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const w of a) if (b.has(w)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+
+// Behält bei Duplikaten den zuerst einsortierten (= neuesten) Eintrag
+function dedupeByTitle(items, threshold = 0.6) {
+  const kept = [];
+  const keptTokens = [];
+  for (const item of items) {
+    const tokens = titleTokens(item.headline);
+    if (!keptTokens.some((t) => jaccard(tokens, t) >= threshold)) {
+      kept.push(item);
+      keptTokens.push(tokens);
+    }
+  }
+  return kept;
 }
 
 // Begrenzt gleichzeitige Übersetzungs-Anfragen, damit der kostenlose Dienst nicht blockt
@@ -191,10 +251,19 @@ async function fetchAllFeeds() {
     if (r.status === "fulfilled") {
       (r.value.items || []).slice(0, 6).forEach((item) => {
         const rawDate = item.isoDate || item.pubDate || "";
+        const headline = cleanText(item.title || "Ohne Titel");
+        const summary = cleanText(item.contentSnippet || item.summary || "").slice(0, 220);
+        const content = cleanText(item.contentEncoded || item.content || item.contentSnippet || item.summary || "").slice(0, 2000);
+
+        // Nur Feeds mit filter:true werden auf KI-Bezug geprüft (Firmen-Blogs + Euractiv)
+        if (feedMeta.filter && !isAiRelevant(headline + " " + summary + " " + content)) {
+          return; // irrelevante Meldung überspringen
+        }
+
         items.push({
-          headline: cleanText(item.title || "Ohne Titel"),
-          summary: cleanText(item.contentSnippet || item.summary || "").slice(0, 220),
-          content: cleanText(item.contentEncoded || item.content || item.contentSnippet || item.summary || "").slice(0, 2000),
+          headline,
+          summary,
+          content,
           source: feedMeta.source,
           category: feedMeta.category,
           date: formatDate(rawDate),
@@ -208,6 +277,7 @@ async function fetchAllFeeds() {
   });
 
   items.sort((a, b) => new Date(b._sortDate) - new Date(a._sortDate));
+  items = dedupeByTitle(items);      // Duplikate über Titel-Ähnlichkeit entfernen (vor dem Kürzen auf 20)
   items = items.slice(0, 20);
   items.forEach((it) => delete it._sortDate);
 
