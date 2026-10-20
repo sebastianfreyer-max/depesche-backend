@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/articles.js": { "maxDuration": 300 },
+    "api/push-dispatch.js": { "maxDuration": 300 },
+    "api/push.js": { "maxDuration": 120 }
+  }
+}

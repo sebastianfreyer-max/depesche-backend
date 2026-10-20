@@ -1,0 +1,15 @@
+{
+  "name": "depesche-backend",
+  "version": "4.0.0",
+  "description": "Datenradar Backend – kostenlose RSS-Kuration mit Volltext, Übersetzung, Zwischenspeicher und Push-Mitteilungen",
+  "private": true,
+  "dependencies": {
+    "@mozilla/readability": "^0.5.0",
+    "jsdom": "^24.1.0",
+    "rss-parser": "^3.13.0",
+    "web-push": "^3.6.7"
+  },
+  "engines": {
+    "node": "24.x"
+  }
+}
